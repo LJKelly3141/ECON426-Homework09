@@ -1,0 +1,302 @@
+---
+title: "ECON426: Instrumental Variables Regression"
+format:
+  docx:
+    toc: false
+    number-sections: false
+---
+
+::: {.callout-note}
+## Assignment Overview: Steps to Complete
+
+1. Load necessary R packages and data.
+2. Understand the endogeneity problem and why OLS fails.
+3. Identify valid instruments and assess instrument relevance.
+4. Estimate IV regression using two-stage least squares (2SLS).
+5. Compare OLS and IV estimates.
+6. Test for weak instruments using first-stage F-statistics.
+7. Conduct overidentification tests when applicable.
+8. Interpret results and discuss economic implications.
+9. Submit your R code, outputs, plots, and written answers.
+:::
+
+# Case Study: Returns to Education with Instrumental Variables
+
+This assignment examines the classic problem of estimating the causal effect of education on wages. Because education is likely correlated with unobserved ability, OLS estimates may be biased. We will use instrumental variables to obtain consistent estimates.
+
+We will use the `mroz` dataset, which contains data on married women's labor force participation and wages from the 1975 Panel Study of Income Dynamics (PSID). The data is available in the `data/` folder.
+
+---
+
+# Instructions
+
+Follow each section carefully, complete the code exercises, and answer the interpretation questions.
+
+# 1. Load Required Packages and Data
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+  tidyverse,
+  ivreg,
+  modelsummary,
+  car,
+  knitr
+)
+
+# Load the mroz dataset from local data folder
+mroz <- read.csv("data/mroz.csv")
+
+# Keep only women in the labor force (with positive wages)
+mroz_lf <- mroz %>%
+  filter(inlf == 1)
+
+# Examine the data
+glimpse(mroz_lf)
+```
+
+**Key Variables:**
+
+- `lwage`: Log of hourly wage
+- `educ`: Years of education
+- `exper`: Years of work experience
+- `expersq`: Experience squared
+- `fatheduc`: Father's years of education (potential instrument)
+- `motheduc`: Mother's years of education (potential instrument)
+
+# 2. The Endogeneity Problem
+
+**Objective:**
+Understand why OLS may produce biased estimates of the returns to education.
+
+## 2.1 OLS Estimation
+
+```{r}
+# Estimate returns to education using OLS
+ols_model <- lm(lwage ~ educ + exper + expersq, data = mroz_lf)
+summary(ols_model)
+```
+
+**The Problem:**
+
+The wage equation is:
+$$\log(wage_i) = \beta_0 + \beta_1 educ_i + \beta_2 exper_i + \beta_3 exper_i^2 + u_i$$
+
+Education may be endogenous because:
+
+1. **Omitted variable bias**: Unobserved ability affects both education and wages
+2. **Measurement error**: Education may be measured with error
+3. **Simultaneity**: Higher expected wages may encourage more education
+
+**Question 1:** Explain in your own words why the OLS estimate of $\beta_1$ (returns to education) might be biased upward. What unobserved factors might cause this bias?
+
+# 3. Instrumental Variables: The Solution
+
+**Objective:**
+Identify valid instruments for education.
+
+## 3.1 Potential Instruments
+
+We will use parental education as instruments for the respondent's education:
+
+- `fatheduc`: Father's years of education
+- `motheduc`: Mother's years of education
+
+**For an instrument to be valid, it must satisfy two conditions:**
+
+1. **Relevance**: The instrument must be correlated with the endogenous variable (education)
+2. **Exogeneity**: The instrument must be uncorrelated with the error term (not directly affect wages)
+
+## 3.2 Check Instrument Relevance
+
+```{r}
+# Correlation between education and parental education
+mroz_lf %>%
+  select(educ, fatheduc, motheduc) %>%
+  cor(use = "complete.obs") %>%
+  round(3) %>%
+  kable(caption = "Correlation Matrix")
+```
+
+```{r}
+# Visualize the relationship
+ggplot(mroz_lf, aes(x = fatheduc, y = educ)) +
+  geom_jitter(alpha = 0.4, width = 0.2, height = 0.2) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "Father's Education (years)",
+       y = "Respondent's Education (years)",
+       title = "Relationship Between Father's and Daughter's Education") +
+  theme_minimal()
+```
+
+**Question 2:** Based on the correlation matrix and plot, does father's education appear to be a relevant instrument? Explain.
+
+# 4. Two-Stage Least Squares (2SLS) Estimation
+
+**Objective:**
+Estimate the returns to education using IV regression.
+
+## 4.1 First Stage: Predict Education
+
+The first stage regresses the endogenous variable on the instruments and other exogenous variables:
+
+$$educ_i = \pi_0 + \pi_1 fatheduc_i + \pi_2 exper_i + \pi_3 exper_i^2 + v_i$$
+
+```{r}
+# First stage regression
+first_stage <- lm(educ ~ fatheduc + exper + expersq, data = mroz_lf)
+summary(first_stage)
+```
+
+**Testing Instrument Strength:**
+
+```{r}
+# F-statistic for excluded instrument
+linearHypothesis(first_stage, "fatheduc = 0")
+```
+
+**Rule of thumb:** F-statistic > 10 suggests the instrument is not weak.
+
+**Question 3:** Report the first-stage F-statistic. Is father's education a strong instrument according to the rule of thumb?
+
+## 4.2 Second Stage: IV Estimation
+
+```{r}
+# IV regression using ivreg
+iv_model <- ivreg(lwage ~ educ + exper + expersq | fatheduc + exper + expersq,
+                  data = mroz_lf)
+summary(iv_model)
+```
+
+**Explanation of syntax:**
+- Left of `|`: outcome ~ endogenous + exogenous variables
+- Right of `|`: instruments + exogenous variables
+
+## 4.3 Compare OLS and IV Estimates
+
+```{r}
+# Side-by-side comparison
+modelsummary(
+  list("OLS" = ols_model, "IV (2SLS)" = iv_model),
+  stars = TRUE,
+  gof_omit = "IC|Log|RMSE",
+  title = "OLS vs IV Estimates of Returns to Education"
+)
+```
+
+**Question 4:**
+a) Report the OLS and IV estimates of the returns to education.
+b) How do they differ? Is the IV estimate larger or smaller than OLS?
+c) What does this suggest about the direction of the bias in OLS?
+
+# 5. Multiple Instruments and Overidentification
+
+**Objective:**
+Use both father's and mother's education as instruments and test overidentifying restrictions.
+
+## 5.1 IV with Two Instruments
+
+```{r}
+# IV with both parents' education as instruments
+iv_model2 <- ivreg(lwage ~ educ + exper + expersq |
+                     fatheduc + motheduc + exper + expersq,
+                   data = mroz_lf)
+summary(iv_model2)
+```
+
+## 5.2 First Stage with Two Instruments
+
+```{r}
+# First stage with both instruments
+first_stage2 <- lm(educ ~ fatheduc + motheduc + exper + expersq, data = mroz_lf)
+summary(first_stage2)
+
+# Joint F-test for excluded instruments
+linearHypothesis(first_stage2, c("fatheduc = 0", "motheduc = 0"))
+```
+
+## 5.3 Overidentification Test (Sargan-Hansen J-test)
+
+When we have more instruments than endogenous variables, we can test whether all instruments are valid:
+
+```{r}
+# Sargan test (also called Hansen J-test)
+summary(iv_model2, diagnostics = TRUE)
+```
+
+**Interpretation:**
+- **Null hypothesis**: All instruments are valid (uncorrelated with error)
+- **Fail to reject**: Instruments appear valid
+- **Reject**: At least one instrument may be invalid
+
+**Question 5:**
+a) What is the overidentification test statistic and p-value?
+b) Based on this test, do both instruments appear to be valid?
+c) Why can't we conduct this test when we have exactly one instrument?
+
+# 6. Compare All Models
+
+```{r}
+modelsummary(
+  list("OLS" = ols_model,
+       "IV (Father)" = iv_model,
+       "IV (Both Parents)" = iv_model2),
+  stars = TRUE,
+  gof_omit = "IC|Log|RMSE",
+  title = "Comparison of OLS and IV Estimates"
+)
+```
+
+# 7. Economic Interpretation
+
+**Question 6:** Based on your IV estimates:
+
+a) What is the estimated percentage increase in wages for an additional year of education?
+
+b) The OLS estimate was approximately 10.7%. The IV estimate is different. What economic story explains this difference?
+
+c) Some economists argue that IV estimates of returns to education are often *higher* than OLS. Propose an explanation for why this might occur in some studies.
+
+# 8. Limitations of IV
+
+**Question 7:** Discuss the following potential concerns with using parental education as an instrument:
+
+a) **Relevance**: Is parental education sufficiently correlated with the respondent's education?
+
+b) **Exogeneity**: Can you think of any ways that parental education might directly affect wages (violating the exclusion restriction)?
+
+c) **External validity**: The IV estimate is a Local Average Treatment Effect (LATE). For whom does this estimate apply?
+
+# Summary Questions
+
+Answer the following questions in complete sentences:
+
+1. **Endogeneity**: Explain why estimating the returns to education is difficult. What is the main source of endogeneity?
+
+2. **IV Solution**: Describe how instrumental variables solve the endogeneity problem. What two conditions must a valid instrument satisfy?
+
+3. **First Stage**: Why is it important to check the first-stage F-statistic? What problems arise with weak instruments?
+
+4. **Comparison**: Compare your OLS and IV estimates. Which do you believe is more reliable for estimating the causal effect of education on wages? Justify your answer.
+
+5. **Policy Implications**: A policymaker wants to know whether investing in education programs will increase wages. Based on your analysis:
+   a) What is your best estimate of the returns to education?
+   b) What caveats would you offer about interpreting this estimate?
+
+# Final Deliverables
+
+Submit:
+
+- Fully annotated R code
+- Output summaries (OLS and IV regression tables)
+- First-stage results and F-statistics
+- Diagnostic test results
+- Written interpretation answers
+
+# Helpful Reminders
+
+- Always check instrument relevance with first-stage F-statistics
+- The exogeneity assumption cannot be tested directly with one instrument
+- IV estimates have larger standard errors than OLS
+- Think carefully about whether the exclusion restriction is plausible
